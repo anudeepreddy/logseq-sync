@@ -29,6 +29,7 @@ import (
 	"github.com/bcspragu/logseq-sync/db"
 	"github.com/bcspragu/logseq-sync/httperr"
 	"github.com/bcspragu/logseq-sync/mem"
+	"github.com/bcspragu/logseq-sync/ws"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"nhooyr.io/websocket"
@@ -101,6 +102,7 @@ type server struct {
 
 	// TODO: Figure out how to handle this more elegantly
 	region string
+	ws     ws.WsServer
 }
 
 func run(args []string) error {
@@ -148,6 +150,7 @@ func run(args []string) error {
 		r:      cryptorandrand.New(),
 		jwt:    jwt.NewParser(),
 		region: *s3Region,
+		ws:     *ws.NewWsServer(),
 	}
 	mux.HandleFunc("/logseq/version", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -213,7 +216,8 @@ func run(args []string) error {
 		"/file-sync/update_files",
 		toHandleFunc[updateFilesRequest, updateFilesResponse](s.updateFiles),
 	)
-	mux.HandleFunc("/file-sync", proxyWS)
+
+	mux.HandleFunc("/file-sync", s.ws.Handler)
 
 	handler := http.Server{
 		Addr:    *addr,
@@ -871,6 +875,9 @@ func (s *server) updateFiles(ctx context.Context, req *updateFilesRequest) (*upd
 	if err := s.db.SetTx(gID, db.Tx(curTX)); err != nil {
 		return nil, httperr.Internal("failed to update tx: %w", err)
 	}
+
+	wsMessage, _ := json.Marshal(&getTxidResponse{Txid: curTX})
+	s.ws.PublishTxnUpdate(wsMessage, string(req.GraphUUID))
 
 	return &updateFilesResponse{
 		TXId: curTX,
